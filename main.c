@@ -122,7 +122,6 @@ void printProcessStatus() {
 // Main function of the program
 int main(int argc, char **argv) {
     read_args(argc, argv);        // Read input parameters
-    printProcessStatus();         // Display them to the user
 
     long timeStart = get_time_ms();  // Measure start time
 
@@ -172,6 +171,7 @@ int main(int argc, char **argv) {
         globalInfo.samples += temp.samples;
     }
 
+    printProcessStatus();         // Display them to the user
     printf("[MAIN] finished with %zu subprocesses\n", subproc_num);
     printf("[MAIN] total sum: %.4lf\n", globalInfo.sinSum);
     printf("[MAIN] total samples: %zu\n", globalInfo.samples);
@@ -181,10 +181,13 @@ int main(int argc, char **argv) {
 
     long timeEnd = get_time_ms();  // Measure end time
 
+    double executionTimeSeconds = (timeEnd - timeStart)/1000.0;  // Convert ms to seconds
+    double operationsPerSecond = globalInfo.samples / executionTimeSeconds;
 
     // Display the results
     printf("[MAIN] Execution time: %ld ms\n", timeEnd - timeStart);
     printf("[MAIN] Average value of sin(x) for random x ∈ [0, π]: %lf\n", average);
+    printf("[MAIN] Operations per second: %.2lf ops/sec\n", operationsPerSecond);
 
     return 0;
 }
