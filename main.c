@@ -8,167 +8,183 @@
 #include <pthread.h>
 #include <math.h>
 
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
 #define PIPE_READ 0
 #define PIPE_WRITE 1
+#define CLOCK_MONOTONIC 1
 
 typedef int pipe_t;
 
-// Struktura do przechowywania wyników obliczeń
+// Structure to store computation results
 typedef struct {
-    double sinSum;     // Suma wartości funkcji sinus z próbek
-    size_t samples;    // Liczba próbek
-    char padding[64];  // Padding zapobiegający konfliktom cache między wątkami
+    double sinSum;     // Sum of sine function values from samples
+    size_t samples;    // Number of samples
+    char padding[64];  // Padding to prevent cache conflicts between threads
 } calcInfo;
 
-// Globalne zmienne konfiguracyjne
-size_t thread_num;        // Liczba wątków na proces
-size_t subproc_num;       // Liczba procesów
-size_t totalSamples;      // Łączna liczba punktów do wygenerowania
-size_t samplesPerThread;  // Liczba punktów na każdy wątek
+// Global configuration variables
+size_t thread_num;        // Number of threads per process
+size_t subproc_num;       // Number of processes
+size_t totalSamples;      // Total number of points to generate
+size_t samplesPerThread;  // Number of points per thread
 
-// Inicjalizuje strukturę wyników
+// Initializes the result structure
 void init_calc_info(calcInfo *info) {
     info->sinSum = 0.0;
     info->samples = 0;
 }
 
-// Zwraca losową wartość z przedziału [0, π]
+// Returns a random value in the range [0, π]
 double get_random_input(unsigned int *seed) {
     return ((double) rand_r(seed) / RAND_MAX) * M_PI;
 }
 
-// Funkcja wykonywana przez każdy wątek
+// Function executed by each thread
 void *compute_sin_sum(void *calcInfo_ptr) {
-    // Rzutowanie wskaźnika na właściwy typ
+    // Cast the pointer to the correct type
     calcInfo *info = (calcInfo *) calcInfo_ptr;
     size_t localSamples = samplesPerThread;
 
-    // Inicjalizacja lokalnego ziarna generatora losowego
+    // Initialize the local random seed
     unsigned int seed = getpid() + pthread_self() + time(NULL);
 
-    // Generowanie punktów i sumowanie wartości sin(x)
-    for (size_t i = 0; i < localSamples; i++) {
-        double x = get_random_input(&seed);  // Losowy x ∈ [0, π]
-        info->sinSum += sin(x);              // Dodaj wartość sin(x) do sumy
-        info->samples++;                     // Zwiększ licznik próbek
-    }
+    printf("[Thread %lu - PID %d] started computing %zu points\n", pthread_self(), getpid(), info->samples);
 
+    // Generate points and sum the values of sin(x)
+    for (size_t i = 0; i < localSamples; i++) {
+        double x = get_random_input(&seed);  // Random x ∈ [0, π]
+        info->sinSum += sin(x);              // Add sin(x) value to the sum
+        info->samples++;                     // Increment the sample counter
+    }
+    printf("[Thread %lu - PID %d] finished computing %zu points. Partian sum: %.4lf\n", pthread_self(), getpid(), info->samples, info->sinSum);
     return NULL;
 }
 
-// Funkcja wywoływana w procesie potomnym - tworzy wątki i zbiera ich wyniki
+// Function called in the child process - creates threads and collects their results
 void execute_fork(calcInfo *forkInfo) {
-    pthread_t threads[thread_num];        // Tablica identyfikatorów wątków
-    calcInfo threadInfos[thread_num];     // Tablica lokalnych struktur dla każdego wątku
+    pthread_t threads[thread_num];        // Array of thread identifiers
+    calcInfo threadInfos[thread_num];     // Array of local structures for each thread
 
-    // Tworzenie wątków
+    printf("[Process %d] started with %zu threads\n", getpid(), thread_num);
+    // Create threads
     for (int i = 0; i < thread_num; i++) {
-        init_calc_info(&threadInfos[i]);  // Zainicjalizuj dane dla wątku
-        pthread_create(&threads[i], NULL, compute_sin_sum, &threadInfos[i]);  // Uruchom wątek
+        init_calc_info(&threadInfos[i]);  // Initialize data for the thread
+        pthread_create(&threads[i], NULL, compute_sin_sum, &threadInfos[i]);  // Start the thread
     }
 
-    // Zbieranie wyników z wątków
+    // Collect results from threads
     for (int i = 0; i < thread_num; i++) {
-        pthread_join(threads[i], NULL);  // Poczekaj aż wątek się zakończy
+        pthread_join(threads[i], NULL);  // Wait for the thread to finish
 
-        // Dodaj wyniki z wątku do sumy procesowej
+        // Add thread results to the process sum
         forkInfo->sinSum += threadInfos[i].sinSum;
         forkInfo->samples += threadInfos[i].samples;
     }
+    printf("[Process %d] finished with %zu threads\n", getpid(), thread_num);
+    printf("[Process %d] total sum: %.4lf\n", getpid(), forkInfo->sinSum);
+    printf("[Process %d] total samples: %zu\n", getpid(), forkInfo->samples);
 }
 
-// Parsuje argumenty programu i ustawia zmienne globalne
+// Parses program arguments and sets global variables
 void read_args(int argc, char **argv) {
     if (argc != 4) {
-        fprintf(stderr, "Użycie: %s <liczba_punktów> <liczba_procesów> <liczba_wątków>\n", argv[0]);
+        fprintf(stderr, "Usage: %s <number_of_points> <number_of_processes> <number_of_threads>\n", argv[0]);
         exit(1);
     }
 
-    // Konwersja argumentów wejściowych na liczby
+    // Convert input arguments to numbers
     totalSamples = atoi(argv[1]);
     subproc_num = atoi(argv[2]);
     thread_num = atoi(argv[3]);
 
-    // Oblicz liczbę punktów przypadającą na jeden wątek
+    // Calculate the number of points per thread
     samplesPerThread = totalSamples / (subproc_num * thread_num);
 }
 
-// Zwraca czas w milisekundach od epoki
+// Returns the time in milliseconds since the epoch
 long get_time_ms() {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
 
-// Wyświetla parametry uruchomienia programu
+// Displays the program's runtime parameters
 void printProcessStatus() {
-    printf("\n***** PARAMETRY URUCHOMIENIA *****\n");
-    printf(" - totalSamples: %ld\n", totalSamples);
-    printf(" - subproc_num:  %ld\n", subproc_num);
-    printf(" - thread_num:   %ld\n\n", thread_num);
+    printf("\nPROGRAM PARAMETERS\n");
+    printf(" - Samples_num: %ld\n", totalSamples);
+    printf(" - subprocesses_num:  %ld\n", subproc_num);
+    printf(" - threads_num:   %ld\n\n", thread_num);
 }
 
-// Główna funkcja programu
+// Main function of the program
 int main(int argc, char **argv) {
-    read_args(argc, argv);        // Odczytaj parametry wejściowe
-    printProcessStatus();         // Wyświetl je użytkownikowi
+    read_args(argc, argv);        // Read input parameters
+    printProcessStatus();         // Display them to the user
 
-    long timeStart = get_time_ms();  // Zmierz czas startu
+    long timeStart = get_time_ms();  // Measure start time
 
     pid_t pid;
-    pid_t child_pipes[subproc_num];     // Tablica PID-ów dzieci
-    pipe_t pipes[subproc_num][2];       // Tablica pipe’ów do komunikacji
-    calcInfo globalInfo;                // Struktura do sumowania wszystkich wyników
-    init_calc_info(&globalInfo);        // Inicjalizacja struktury
+    pid_t child_pipes[subproc_num];     // Array of child PIDs
+    pipe_t pipes[subproc_num][2];       // Array of pipes for communication
+    calcInfo globalInfo;                // Structure to sum all results
+    init_calc_info(&globalInfo);        // Initialize the structure
 
-    // Tworzenie procesów potomnych
+    // Create child processes
     for (int i = 0; i < subproc_num; i++) {
-        pipe(pipes[i]);              // Tworzenie pipe'a dla komunikacji z dzieckiem
-        pid = fork();                // Tworzenie procesu potomnego
+        pipe(pipes[i]);              // Create a pipe for communication with the child
+        pid = fork();                // Create a child process
         child_pipes[i] = pid;
 
         if (pid == -1) {
-            perror("Nie udało się utworzyć procesu");
+            perror("Failed to create process");
             exit(1);
         } else if (pid == 0) {
-            // Proces potomny wykonuje swoje obliczenia
+            // Child process performs its computations
             calcInfo localInfo;
             init_calc_info(&localInfo);
 
-            execute_fork(&localInfo);  // Uruchom wątki i zbierz ich wyniki
+            execute_fork(&localInfo);  // Start threads and collect their results
 
-            // Wyślij dane do procesu nadrzędnego przez pipe
+            // Send data to the parent process through the pipe
             close(pipes[i][PIPE_READ]);
             write(pipes[i][PIPE_WRITE], &localInfo, sizeof(calcInfo));
             close(pipes[i][PIPE_WRITE]);
 
-            return 0;  // Zakończ proces potomny
+            return 0;  // Exit the child process
         }
     }
 
-    // Proces główny zbiera dane od potomków
+    // Parent process collects data from children
     for (int i = 0; i < subproc_num; i++) {
         calcInfo temp;
 
-        waitpid(child_pipes[i], NULL, 0);  // Czekaj na zakończenie dziecka
+        waitpid(child_pipes[i], NULL, 0);  // Wait for the child to finish
 
-        close(pipes[i][PIPE_WRITE]);      // Zamknij nieużywaną końcówkę pipe’a
-        read(pipes[i][PIPE_READ], &temp, sizeof(calcInfo));  // Odczytaj dane
+        close(pipes[i][PIPE_WRITE]);      // Close the unused end of the pipe
+        read(pipes[i][PIPE_READ], &temp, sizeof(calcInfo));  // Read data
         close(pipes[i][PIPE_READ]);
 
-        // Dodaj dane do wyniku globalnego
+        // Add data to the global result
         globalInfo.sinSum += temp.sinSum;
         globalInfo.samples += temp.samples;
     }
 
-    // Obliczenie średniej wartości sin(x)
+    printf("[MAIN] finished with %zu subprocesses\n", subproc_num);
+    printf("[MAIN] total sum: %.4lf\n", globalInfo.sinSum);
+    printf("[MAIN] total samples: %zu\n", globalInfo.samples);
+
+    // Calculate the average value of sin(x)
     double average = globalInfo.sinSum / globalInfo.samples;
 
-    long timeEnd = get_time_ms();  // Zmierz czas końcowy
+    long timeEnd = get_time_ms();  // Measure end time
 
-    // Wyświetlenie wyników
-    printf("Czas wykonania: %ld ms\n", timeEnd - timeStart);
-    printf("Średnia wartość sin(x) dla losowych x ∈ [0, π]: %lf\n", average);
+
+    // Display the results
+    printf("[MAIN] Execution time: %ld ms\n", timeEnd - timeStart);
+    printf("[MAIN] Average value of sin(x) for random x ∈ [0, π]: %lf\n", average);
 
     return 0;
 }
